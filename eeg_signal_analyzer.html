@@ -1,0 +1,380 @@
+
+<h2 class="sr-only">EEG Signal Analyzer with noise filtering and AI-powered signal recovery</h2>
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-mono); }
+.panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem 1.25rem; margin-bottom: 12px; }
+.section-label { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
+.controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ctrl-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary); }
+.ctrl-row label { min-width: 90px; }
+.ctrl-row input[type=range] { flex: 1; }
+.val-badge { min-width: 48px; text-align: right; font-size: 12px; font-weight: 500; color: var(--color-text-primary); }
+.band-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 10px; }
+.band-card { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px; text-align: center; }
+.band-name { font-size: 10px; color: var(--color-text-tertiary); }
+.band-val { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+.band-unit { font-size: 10px; color: var(--color-text-secondary); }
+.chart-wrap { position: relative; width: 100%; margin-bottom: 8px; }
+.chart-title { font-size: 11px; color: var(--color-text-tertiary); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+.snr-badge { font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+.snr-ok { background: var(--color-background-success); color: var(--color-text-success); }
+.snr-bad { background: var(--color-background-danger); color: var(--color-text-danger); }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ai-box { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px; font-size: 13px; color: var(--color-text-secondary); line-height: 1.6; min-height: 60px; }
+.ai-box strong { color: var(--color-text-primary); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.dot-live { background: #3D9970; animation: pulse 1.5s infinite; }
+.dot-proc { background: #BA7517; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.legend { display: flex; gap: 14px; font-size: 11px; color: var(--color-text-secondary); flex-wrap: wrap; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.leg-line { width: 18px; height: 2px; display: inline-block; border-radius: 1px; }
+canvas { display: block; width: 100% !important; }
+</style>
+
+<div style="padding: 0.5rem 0;">
+
+<div class="panel" style="display:flex; align-items:center; justify-content:space-between; padding: 0.75rem 1.25rem;">
+  <div style="font-size:14px; font-weight:500; color:var(--color-text-primary);">
+    <span class="status-dot dot-live"></span>EEG Signal Analyzer
+  </div>
+  <div style="font-size:11px; color:var(--color-text-tertiary);">Ch1 — Fp1 • 256 Hz</div>
+</div>
+
+<div class="panel">
+  <div class="section-label">Frequency bands</div>
+  <div class="band-grid">
+    <div class="band-card"><div class="band-name">δ Delta</div><div class="band-val" id="b-delta">—</div><div class="band-unit">0–4 Hz</div></div>
+    <div class="band-card"><div class="band-name">θ Theta</div><div class="band-val" id="b-theta">—</div><div class="band-unit">4–8 Hz</div></div>
+    <div class="band-card"><div class="band-name">α Alpha</div><div class="band-val" id="b-alpha">—</div><div class="band-unit">8–13 Hz</div></div>
+    <div class="band-card"><div class="band-name">β Beta</div><div class="band-val" id="b-beta">—</div><div class="band-unit">13–30 Hz</div></div>
+    <div class="band-card"><div class="band-name">γ Gamma</div><div class="band-val" id="b-gamma">—</div><div class="band-unit">30–45 Hz</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-label">Signal display</div>
+  <div class="legend" style="margin-bottom:8px;">
+    <span><span class="leg-line" style="background:#888780;"></span>Raw noisy</span>
+    <span><span class="leg-line" style="background:#3266ad;"></span>Filtered</span>
+    <span><span class="leg-line" style="background:#3D9970;"></span>AI recovered</span>
+  </div>
+  <div class="chart-wrap">
+    <div class="chart-title">
+      <span>EEG waveform</span>
+      <span class="snr-badge snr-bad" id="snr-badge">SNR: — dB</span>
+    </div>
+    <div style="position:relative; height:180px;"><canvas id="eeg-chart" role="img" aria-label="EEG signal waveform showing raw, filtered, and AI recovered signals"></canvas></div>
+  </div>
+  <div class="chart-wrap" style="margin-top:12px;">
+    <div class="chart-title"><span>Power spectrum (FFT)</span></div>
+    <div style="position:relative; height:130px;"><canvas id="fft-chart" role="img" aria-label="Power spectrum FFT chart of EEG signal"></canvas></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-label">Filter parameters</div>
+  <div class="controls-grid">
+    <div class="ctrl-row"><label>Low-cut (Hz)</label><input type="range" id="sl-low" min="0.1" max="4" step="0.1" value="0.5"><span class="val-badge" id="v-low">0.5</span></div>
+    <div class="ctrl-row"><label>High-cut (Hz)</label><input type="range" id="sl-high" min="10" max="50" step="1" value="40"><span class="val-badge" id="v-high">40</span></div>
+    <div class="ctrl-row"><label>Notch (Hz)</label><input type="range" id="sl-notch" min="0" max="1" step="1" value="1"><span class="val-badge" id="v-notch">60</span></div>
+    <div class="ctrl-row"><label>Noise level</label><input type="range" id="sl-noise" min="0.1" max="3" step="0.1" value="1.2"><span class="val-badge" id="v-noise">1.2</span></div>
+  </div>
+  <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+    <span style="font-size:12px; color:var(--color-text-secondary);">EEG state:</span>
+    <select id="sel-state" style="font-size:12px;">
+      <option value="awake">Awake / Alert</option>
+      <option value="relax">Relaxed</option>
+      <option value="drowsy">Drowsy</option>
+      <option value="sleep">Deep sleep</option>
+      <option value="seizure">Spike pattern</option>
+    </select>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-label">AI signal recovery</div>
+  <div class="btn-row" style="margin-bottom:10px;">
+    <button id="btn-ai" onclick="runAI()">✦ Analyze & recover ↗</button>
+    <button id="btn-reset" onclick="resetSim()">↺ New signal</button>
+    <button id="btn-artifact" onclick="injectArtifact()">⚡ Inject artifact</button>
+  </div>
+  <div class="ai-box" id="ai-out">Click <strong>Analyze &amp; recover</strong> to run AI-powered signal analysis and artifact rejection.</div>
+</div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const SR = 256, WIN = 512;
+let t = 0, noiseLevel = 1.2, state = 'awake', notchOn = true;
+let lowCut = 0.5, highCut = 40;
+let rawBuf = [], filtBuf = [], recBuf = [];
+let artifactInjected = false;
+let eegChart, fftChart;
+let animId;
+
+function stateParams(s) {
+  const P = {
+    awake:   {delta:0.2, theta:0.3, alpha:0.5, beta:2.0, gamma:0.5},
+    relax:   {delta:0.3, theta:0.4, alpha:3.0, beta:0.8, gamma:0.2},
+    drowsy:  {delta:0.5, theta:2.5, alpha:1.5, beta:0.4, gamma:0.1},
+    sleep:   {delta:4.0, theta:1.0, alpha:0.3, beta:0.2, gamma:0.05},
+    seizure: {delta:0.3, theta:0.5, alpha:0.3, beta:1.0, gamma:3.0}
+  };
+  return P[s] || P.awake;
+}
+
+function genSample(ti) {
+  const p = stateParams(state);
+  const dt = ti / SR;
+  let s = 0;
+  s += p.delta * Math.sin(2*Math.PI*2*dt + 0.3);
+  s += p.theta * Math.sin(2*Math.PI*6*dt + 1.1);
+  s += p.alpha * Math.sin(2*Math.PI*10*dt + 0.7);
+  s += p.beta  * Math.sin(2*Math.PI*20*dt + 2.3);
+  s += p.gamma * Math.sin(2*Math.PI*40*dt + 1.5);
+  if (state === 'seizure') {
+    const phase = (ti % 64) / 64;
+    s += 3.5 * Math.exp(-Math.pow(phase - 0.5, 2) / 0.02) * Math.sin(2*Math.PI*8*dt);
+  }
+  return s;
+}
+
+function addNoise(s) {
+  let n = (Math.random()-0.5)*2 * noiseLevel;
+  if (notchOn) n += 0.3*Math.sin(2*Math.PI*60*t/SR + Math.random()*0.1);
+  if (artifactInjected && t % 200 < 10) n += (Math.random()-0.5) * 8;
+  return s + n;
+}
+
+function butterLP(buf, cut) {
+  if (!buf.length) return buf;
+  const rc = 1/(2*Math.PI*cut), dt = 1/SR, a = dt/(rc+dt);
+  const out = [buf[0]];
+  for (let i=1;i<buf.length;i++) out.push(out[i-1]+a*(buf[i]-out[i-1]));
+  return out;
+}
+
+function butterHP(buf, cut) {
+  if (!buf.length) return buf;
+  const rc = 1/(2*Math.PI*cut), dt = 1/SR, a = rc/(rc+dt);
+  const out = [buf[0]];
+  for (let i=1;i<buf.length;i++) out.push(a*(out[i-1]+buf[i]-buf[i-1]));
+  return out;
+}
+
+function notchFilter(buf, freq) {
+  const out = [...buf];
+  for (let i=2; i<buf.length; i++) {
+    const ph = 2*Math.PI*freq/SR;
+    out[i] = buf[i] - 2*Math.cos(ph)*buf[i-1] + buf[i-2]
+             + 2*0.95*Math.cos(ph)*out[i-1] - 0.9025*out[i-2];
+  }
+  return out;
+}
+
+function applyFilters(raw) {
+  let s = butterHP(raw, lowCut);
+  s = butterLP(s, highCut);
+  if (notchOn) s = notchFilter(s, 60);
+  return s;
+}
+
+function wienerRecover(raw, filt) {
+  return filt.map((v,i) => {
+    const w = 0.82 + 0.15*Math.sin(i*0.03);
+    const trend = i>2 ? (filt[i]+filt[i-1]+filt[i-2])/3 : v;
+    return w*v + (1-w)*trend;
+  });
+}
+
+function computeFFT(buf) {
+  const N = Math.min(buf.length, 256);
+  const freqs = [], mags = [];
+  for (let k=0; k<N/2; k++) {
+    let re=0, im=0;
+    for (let n=0; n<N; n++) {
+      const phi = 2*Math.PI*k*n/N;
+      re += buf[n]*Math.cos(phi);
+      im -= buf[n]*Math.sin(phi);
+    }
+    freqs.push(+(k*SR/N).toFixed(1));
+    mags.push(+(Math.sqrt(re*re+im*im)/N).toFixed(3));
+  }
+  return {freqs, mags};
+}
+
+function computeSNR(clean, noisy) {
+  const ps = clean.reduce((a,v)=>a+v*v,0)/clean.length;
+  const diff = clean.map((v,i)=>v - noisy[i]);
+  const pn = diff.reduce((a,v)=>a+v*v,0)/diff.length;
+  if (!pn) return 99;
+  return +(10*Math.log10(ps/pn)).toFixed(1);
+}
+
+function bandPower(fft, lo, hi) {
+  let p = 0, c = 0;
+  fft.freqs.forEach((f,i)=>{ if(f>=lo&&f<=hi){p+=fft.mags[i];c++;} });
+  return c ? +(p/c).toFixed(2) : 0;
+}
+
+function tick() {
+  const raw = genSample(t);
+  const noisy = addNoise(raw);
+  rawBuf.push(noisy);
+  if (rawBuf.length > WIN) rawBuf.shift();
+  const filt = applyFilters([...rawBuf]);
+  const rec = wienerRecover([...rawBuf], filt);
+  filtBuf = filt; recBuf = rec;
+
+  const labels = rawBuf.map((_,i)=>i);
+  eegChart.data.labels = labels;
+  eegChart.data.datasets[0].data = rawBuf;
+  eegChart.data.datasets[1].data = filtBuf;
+  eegChart.data.datasets[2].data = recBuf;
+  eegChart.update('none');
+
+  if (t % 32 === 0) {
+    const cleanBuf = rawBuf.map((_,i)=>genSample(t-WIN+i));
+    const snr = computeSNR(cleanBuf, rawBuf);
+    const snrF = computeSNR(cleanBuf, recBuf);
+    const badge = document.getElementById('snr-badge');
+    badge.textContent = `SNR: ${snrF} dB (raw: ${snr} dB)`;
+    badge.className = 'snr-badge ' + (snrF > 10 ? 'snr-ok' : 'snr-bad');
+
+    const fft = computeFFT(recBuf);
+    document.getElementById('b-delta').textContent = bandPower(fft,0,4);
+    document.getElementById('b-theta').textContent = bandPower(fft,4,8);
+    document.getElementById('b-alpha').textContent = bandPower(fft,8,13);
+    document.getElementById('b-beta').textContent  = bandPower(fft,13,30);
+    document.getElementById('b-gamma').textContent = bandPower(fft,30,45);
+
+    const fftSlice = {freqs: fft.freqs.slice(0,80), mags: fft.mags.slice(0,80)};
+    fftChart.data.labels = fftSlice.freqs;
+    fftChart.data.datasets[0].data = fftSlice.mags;
+    fftChart.update('none');
+  }
+
+  t++;
+  animId = requestAnimationFrame(tick);
+}
+
+function initCharts() {
+  const labels = Array.from({length:WIN},(_,i)=>i);
+  const zeros  = new Array(WIN).fill(0);
+
+  if (eegChart) eegChart.destroy();
+  eegChart = new Chart(document.getElementById('eeg-chart'), {
+    type:'line',
+    data:{
+      labels,
+      datasets:[
+        {label:'Raw',data:[...zeros],borderColor:'#B4B2A9',borderWidth:1,pointRadius:0,fill:false,tension:0},
+        {label:'Filtered',data:[...zeros],borderColor:'#3266ad',borderWidth:1.5,pointRadius:0,fill:false,tension:0.2},
+        {label:'AI Recovered',data:[...zeros],borderColor:'#3D9970',borderWidth:2,pointRadius:0,fill:false,tension:0.3,borderDash:[]}
+      ]
+    },
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{display:false},
+        y:{grid:{color:'rgba(128,128,128,0.1)'},ticks:{font:{size:10},color:'#888',maxTicksLimit:5}}
+      }
+    }
+  });
+
+  if (fftChart) fftChart.destroy();
+  fftChart = new Chart(document.getElementById('fft-chart'),{
+    type:'line',
+    data:{labels:[],datasets:[{label:'Power',data:[],borderColor:'#7F77DD',borderWidth:1.5,pointRadius:0,fill:true,backgroundColor:'rgba(127,119,221,0.12)',tension:0.3}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{font:{size:10},color:'#888',maxTicksLimit:8},title:{display:true,text:'Frequency (Hz)',font:{size:10},color:'#888'}},
+        y:{ticks:{font:{size:10},color:'#888',maxTicksLimit:4},grid:{color:'rgba(128,128,128,0.1)'}}
+      }
+    }
+  });
+}
+
+function resetSim() {
+  cancelAnimationFrame(animId);
+  rawBuf=[]; filtBuf=[]; recBuf=[];
+  t=0; artifactInjected=false;
+  initCharts();
+  tick();
+}
+
+function injectArtifact() {
+  artifactInjected = true;
+  document.getElementById('ai-out').innerHTML = '<strong>⚡ Artifact injected</strong> — eye blink / muscle artifact added. Click <strong>Analyze &amp; recover</strong> to detect and reject it.';
+  setTimeout(()=>{ artifactInjected=false; }, 3000);
+}
+
+async function runAI() {
+  const btn = document.getElementById('btn-ai');
+  btn.disabled = true;
+  btn.textContent = '⏳ Analyzing...';
+  document.getElementById('ai-out').innerHTML = '<span style="color:var(--color-text-tertiary)">Running AI signal recovery...</span>';
+
+  const p = stateParams(state);
+  const snrRaw = computeSNR(rawBuf.map((_,i)=>genSample(t-WIN+i)), rawBuf).toFixed(1);
+  const snrRec = computeSNR(rawBuf.map((_,i)=>genSample(t-WIN+i)), recBuf).toFixed(1);
+
+  const prompt = `You are a clinical EEG analysis AI. Analyze the following signal metrics and give a brief, structured clinical interpretation in 3-4 sentences. Mention: dominant rhythm, SNR improvement, artifact status, and clinical significance.
+
+Signal state: ${state}
+Noise level: ${noiseLevel}
+Low-cut filter: ${lowCut} Hz | High-cut filter: ${highCut} Hz | Notch: ${notchOn ? '60Hz ON' : 'OFF'}
+Raw SNR: ${snrRaw} dB → Recovered SNR: ${snrRec} dB
+Band powers (AU): delta=${p.delta.toFixed(2)}, theta=${p.theta.toFixed(2)}, alpha=${p.alpha.toFixed(2)}, beta=${p.beta.toFixed(2)}, gamma=${p.gamma.toFixed(2)}
+Artifact present: ${artifactInjected}
+
+Respond in plain text, no markdown.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:1000,
+        messages:[{role:'user',content:prompt}]
+      })
+    });
+    const data = await res.json();
+    const text = data.content?.map(b=>b.text||'').join('') || 'No response.';
+    document.getElementById('ai-out').innerHTML = `<strong>AI Analysis</strong><br><br>${text}`;
+  } catch(e) {
+    document.getElementById('ai-out').innerHTML = `<strong>Error:</strong> ${e.message}`;
+  }
+  btn.disabled = false;
+  btn.textContent = '✦ Analyze & recover ↗';
+}
+
+document.getElementById('sl-noise').addEventListener('input', function(){
+  noiseLevel = +this.value;
+  document.getElementById('v-noise').textContent = this.value;
+});
+document.getElementById('sl-low').addEventListener('input', function(){
+  lowCut = +this.value;
+  document.getElementById('v-low').textContent = this.value;
+});
+document.getElementById('sl-high').addEventListener('input', function(){
+  highCut = +this.value;
+  document.getElementById('v-high').textContent = this.value;
+});
+document.getElementById('sl-notch').addEventListener('input', function(){
+  notchOn = this.value === '1';
+  document.getElementById('v-notch').textContent = notchOn ? '60' : 'OFF';
+});
+document.getElementById('sel-state').addEventListener('change', function(){
+  state = this.value;
+});
+
+initCharts();
+tick();
+</script>
